@@ -171,7 +171,7 @@ pub(crate) fn handle_key(
             app.svc.engine.stop();
         }
         KeyCode::Char('n') | KeyCode::Media(MediaKeyCode::TrackNext) => {
-            let _ = app.svc.engine.next();
+            app.skip_next();
         }
         KeyCode::Char('b') | KeyCode::Media(MediaKeyCode::TrackPrevious) => {
             let _ = app.svc.engine.prev();
@@ -202,7 +202,8 @@ pub(crate) fn handle_key(
         }
         // Off → all → one, Spotify's order, said on the status line.
         KeyCode::Char('R') => {
-            let mode = app.svc.engine.repeat_mode().next();
+            let mode = app.transport.repeat.next();
+            app.transport.repeat = mode;
             app.status = match app.svc.engine.set_repeat(mode) {
                 Ok(()) => repeat_status(mode).to_string(),
                 // Kept all the same: the next playlist or track starts with it.

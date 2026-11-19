@@ -22,7 +22,7 @@ pub(crate) fn handle_media_control_event(
 ) {
     match ev {
         MediaControlEvent::Next => {
-            let _ = app.svc.engine.next();
+            app.skip_next();
         }
         MediaControlEvent::Previous => {
             let _ = app.svc.engine.prev();

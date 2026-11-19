@@ -144,10 +144,6 @@ pub struct Engine {
     pub bands: Arc<Mutex<VisBands>>,
     /// `None` only for [`Engine::detached`]: no connection, every command a no-op.
     inner: Option<Arc<Inner>>,
-    /// The repeat mode, which every load carries. librespot clears repeat on
-    /// each load (`handle_load` calls `reset_options`), so setting it once
-    /// lasts only until the next playlist, album or track is started.
-    repeat: Mutex<Repeat>,
 }
 
 /// The half of the engine the reconnect watchdog needs to hold, so it can swap
@@ -206,7 +202,6 @@ impl Engine {
         Self {
             bands: Arc::new(Mutex::new(VisBands::new())),
             inner: None,
-            repeat: Mutex::new(Repeat::Off),
         }
     }
 
@@ -265,10 +260,15 @@ impl Engine {
 
     /// Start playing a context (playlist / album / artist / track URI). When
     /// `shuffle` is set, Spotify shuffles the *entire* context server-side.
-    pub fn play_context(&self, context_uri: impl Into<String>, shuffle: bool) -> Result<()> {
+    pub fn play_context(
+        &self,
+        context_uri: impl Into<String>,
+        shuffle: bool,
+        repeat: Repeat,
+    ) -> Result<()> {
         let options = LoadRequestOptions {
             start_playing: true,
-            context_options: context_options(shuffle, self.repeat_mode()),
+            context_options: context_options(shuffle, repeat),
             ..Default::default()
         };
         self.active_command("load context", |spirc| {
@@ -283,11 +283,12 @@ impl Engine {
         track_uri: Option<String>,
         position_ms: u32,
         shuffle: bool,
+        repeat: Repeat,
     ) -> Result<()> {
         let options = LoadRequestOptions {
             start_playing: true,
             seek_to: position_ms,
-            context_options: context_options(shuffle, self.repeat_mode()),
+            context_options: context_options(shuffle, repeat),
             playing_track: track_uri.map(PlayingTrack::Uri),
         };
         self.active_command("load context at", |spirc| {
@@ -304,10 +305,11 @@ impl Engine {
         start_uri: Option<String>,
         start_position_ms: u32,
         shuffle: bool,
+        repeat: Repeat,
     ) -> Result<()> {
         let options = LoadRequestOptions {
             start_playing: true,
-            context_options: context_options(shuffle, self.repeat_mode()),
+            context_options: context_options(shuffle, repeat),
             playing_track: start_uri.map(PlayingTrack::Uri),
             seek_to: start_position_ms,
         };
@@ -318,11 +320,11 @@ impl Engine {
 
     /// Load a single track and start playing at `position_ms` — used to resume
     /// the last session's track when the user first hits play.
-    pub fn play_track_at(&self, uri: String, position_ms: u32) -> Result<()> {
+    pub fn play_track_at(&self, uri: String, position_ms: u32, repeat: Repeat) -> Result<()> {
         let options = LoadRequestOptions {
             start_playing: true,
             seek_to: position_ms,
-            context_options: context_options(false, self.repeat_mode()),
+            context_options: context_options(false, repeat),
             ..Default::default()
         };
         self.active_command("resume track", |spirc| {
@@ -345,12 +347,7 @@ impl Engine {
         self.active_command("toggle", Spirc::play_pause)
     }
     pub fn next(&self) -> Result<()> {
-        self.active_command("next", Spirc::next)?;
-        // librespot has just dropped repeat-one; follow it, or the next load
-        // would turn it back on.
-        let mut repeat = self.repeat.lock().unwrap_or_else(PoisonError::into_inner);
-        *repeat = repeat.after_skip();
-        Ok(())
+        self.active_command("next", Spirc::next)
     }
     pub fn prev(&self) -> Result<()> {
         self.active_command("prev", Spirc::prev)
@@ -358,15 +355,9 @@ impl Engine {
     pub fn shuffle(&self, on: bool) -> Result<()> {
         self.active_command("shuffle", |spirc| spirc.shuffle(on))
     }
-    /// The repeat mode now, and the one the next load starts with.
-    pub fn repeat_mode(&self) -> Repeat {
-        *self.repeat.lock().unwrap_or_else(PoisonError::into_inner)
-    }
-    /// Switch repeat for what's playing and for everything loaded after it. The
-    /// mode is kept even when the player can't be reached, so the next load
-    /// still honours it.
+    /// Update repeat on the active player. Callers own the persisted repeat
+    /// mode and pass it on every load, since librespot clears options on load.
     pub fn set_repeat(&self, mode: Repeat) -> Result<()> {
-        *self.repeat.lock().unwrap_or_else(PoisonError::into_inner) = mode;
         let (context, track) = mode.flags();
         self.active_command("repeat", |spirc| spirc.repeat(context))?;
         self.command("repeat track", |spirc| spirc.repeat_track(track))
@@ -538,7 +529,6 @@ pub async fn run(
     creds: Credentials,
     tx: flume::Sender<EngineEvent>,
     initial_volume_pct: u8,
-    initial_repeat: Repeat,
 ) -> Result<Engine> {
     let bands = VisBands::shared();
     let equalizer = shared_equalizer();
@@ -562,7 +552,6 @@ pub async fn run(
     Ok(Engine {
         bands,
         inner: Some(inner),
-        repeat: Mutex::new(initial_repeat),
     })
 }
 
@@ -920,9 +909,19 @@ mod tests {
 
     #[cfg(feature = "test-support")]
     #[test]
-    fn the_repeat_mode_is_kept_when_the_player_is_unreachable() {
+    fn load_methods_accept_explicit_repeat_mode() {
         let engine = Engine::detached();
-        assert!(engine.set_repeat(Repeat::One).is_err());
-        assert_eq!(engine.repeat_mode(), Repeat::One);
+        assert!(engine
+            .play_context("spotify:playlist:1", false, Repeat::All)
+            .is_err());
+        assert!(engine
+            .play_context_at("spotify:playlist:1".into(), None, 0, true, Repeat::One)
+            .is_err());
+        assert!(engine
+            .play_tracks(vec!["spotify:track:1".into()], None, 0, false, Repeat::Off)
+            .is_err());
+        assert!(engine
+            .play_track_at("spotify:track:1".into(), 0, Repeat::One)
+            .is_err());
     }
 }

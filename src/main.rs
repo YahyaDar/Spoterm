@@ -360,11 +360,12 @@ async fn boot(
         terminal,
         &mut signals,
         "connecting to Spotify",
-        engine::run(creds, ev_tx, init_vol, saved.repeat_mode()),
+        engine::run(creds, ev_tx, init_vol),
     )
     .await?
     .context("start engine")?;
     drop(connecting);
+    let repeat = saved.repeat_mode();
     let equalizer = saved.equalizer.normalized();
     engine.set_equalizer(equalizer);
 
@@ -374,7 +375,7 @@ async fn boot(
     // persisted session; `theme` never reaches here (see `main`).
     let startup_uri = std::env::args().nth(1).filter(|a| a != "theme");
     if let Some(uri) = startup_uri.as_ref() {
-        let _ = engine.play_context(uri.clone(), false);
+        let _ = engine.play_context(uri.clone(), false, repeat);
     }
 
     let restore_on_startup = should_restore_saved_playback(
@@ -456,6 +457,7 @@ async fn boot(
         },
         transport: Transport {
             shuffle: saved.shuffle,
+            repeat,
             volume: if saved.volume == 0 {
                 80
             } else {
@@ -688,7 +690,13 @@ async fn run_ui(
                     dirty = true;
                     match rad {
                         Ok(radio) if !radio.uris.is_empty() => {
-                            if let Err(e) = app.svc.engine.play_tracks(radio.uris, None, radio.start_position_ms, false) {
+                            if let Err(e) = app.svc.engine.play_tracks(
+                                radio.uris,
+                                None,
+                                radio.start_position_ms,
+                                false,
+                                app.transport.repeat,
+                            ) {
                                 app.status = format!("couldn't play radio: {e:#}");
                             }
                             app.transport.playback_started = true;
@@ -967,11 +975,13 @@ fn resume_source(app: &mut App, radio_tx: &flume::Sender<Result<Radio, String>>)
 
     match app.transport.source.clone() {
         PlaySource::Context(ctx) => {
-            if let Err(e) = app
-                .svc
-                .engine
-                .play_context_at(ctx, track, pos, app.transport.shuffle)
-            {
+            if let Err(e) = app.svc.engine.play_context_at(
+                ctx,
+                track,
+                pos,
+                app.transport.shuffle,
+                app.transport.repeat,
+            ) {
                 app.status = format!("couldn't play: {e:#}");
             }
         }
@@ -1004,11 +1014,13 @@ fn resume_source(app: &mut App, radio_tx: &flume::Sender<Result<Radio, String>>)
                 .iter()
                 .map(|i| i.uri.clone())
                 .collect();
-            if let Err(e) = app
-                .svc
-                .engine
-                .play_tracks(uris, track, pos, app.transport.shuffle)
-            {
+            if let Err(e) = app.svc.engine.play_tracks(
+                uris,
+                track,
+                pos,
+                app.transport.shuffle,
+                app.transport.repeat,
+            ) {
                 app.status = format!("couldn't play: {e:#}");
             }
         }
@@ -1021,17 +1033,20 @@ fn resume_source(app: &mut App, radio_tx: &flume::Sender<Result<Radio, String>>)
                     uris.push(u.clone());
                 }
                 uris.extend(app.transport.queue_uris.iter().cloned());
-                if let Err(e) = app
-                    .svc
-                    .engine
-                    .play_tracks(uris, track, pos, app.transport.shuffle)
-                {
+                if let Err(e) = app.svc.engine.play_tracks(
+                    uris,
+                    track,
+                    pos,
+                    app.transport.shuffle,
+                    app.transport.repeat,
+                ) {
                     app.status = format!("couldn't play: {e:#}");
                 }
             } else {
                 match track {
                     Some(uri) => {
-                        if let Err(e) = app.svc.engine.play_track_at(uri, pos) {
+                        if let Err(e) = app.svc.engine.play_track_at(uri, pos, app.transport.repeat)
+                        {
                             app.status = format!("couldn't play: {e:#}");
                         }
                     }
