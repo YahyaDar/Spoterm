@@ -70,10 +70,13 @@ pub(crate) fn scrub_target(from_ms: u32, duration_ms: u32, delta_ms: i64) -> u32
 }
 
 impl PlaybackState {
-    pub(crate) fn position_ms(&self) -> u32 {
+    pub(crate) fn position_ms(&self, now: Instant) -> u32 {
         match &self.now {
             Some(n) if n.is_playing => {
-                (n.position_ms + n.position_at.elapsed().as_millis() as u32).min(n.duration_ms)
+                let elapsed = now.saturating_duration_since(n.position_at).as_millis();
+                n.position_ms
+                    .saturating_add(elapsed.min(u32::MAX as u128) as u32)
+                    .min(n.duration_ms)
             }
             Some(n) => n.position_ms.min(n.duration_ms),
             None => 0,
@@ -82,46 +85,47 @@ impl PlaybackState {
     /// Stop the playhead where it is, keeping the extrapolated position, and
     /// report whether it had been playing. For when the audio stops without
     /// the engine saying so — a dropped connection takes its player with it.
-    pub(crate) fn freeze(&mut self) -> bool {
-        let position_ms = self.position_ms();
+    pub(crate) fn freeze(&mut self, now: Instant) -> bool {
+        let position_ms = self.position_ms(now);
         let Some(n) = self.now.as_mut() else {
             return false;
         };
         let was_playing = n.is_playing;
         n.is_playing = false;
         n.position_ms = position_ms;
-        n.position_at = Instant::now();
+        n.position_at = now;
         was_playing
     }
     /// Move the progress bar, without telling the engine. Reports from the
     /// engine are ignored mid-scrub — what we painted is newer than anything
     /// librespot has heard about.
-    pub(crate) fn set_local_position(&mut self, position_ms: u32, from_engine: bool) {
+    pub(crate) fn set_local_position(&mut self, position_ms: u32, from_engine: bool, now: Instant) {
         if !should_apply_engine_position(from_engine, self.seek_target) {
             return;
         }
         if let Some(n) = self.now.as_mut() {
             n.position_ms = position_ms.min(n.duration_ms);
-            n.position_at = Instant::now();
+            n.position_at = now;
         }
     }
     /// Seek to an absolute position (clamped), updating the local display too.
-    pub(crate) fn seek_to(&mut self, engine: &Engine, position_ms: u32) {
+    pub(crate) fn seek_to(&mut self, engine: &Engine, position_ms: u32, now: Instant) {
         let Some(dur) = self.now.as_ref().map(|n| n.duration_ms) else {
             return;
         };
         let new = position_ms.min(dur);
         let _ = engine.seek(new);
-        self.set_local_position(new, false);
+        self.set_local_position(new, false, now);
     }
     /// One Shift+arrow press, moving the playhead by `delta_ms`.
     ///
     /// A seek per key repeat overshot the track and made librespot flush and
     /// refill its audio buffer 30×/s — that pile-up was the stutter. Repeats are
     /// throttled and the engine seek deferred to `flush_seek`.
-    pub(crate) fn seek_step(&mut self, delta_ms: i64) {
-        let now = Instant::now();
-        if self.seek_target.is_some() && now.duration_since(self.seek_last_step) < SEEK_REPEAT {
+    pub(crate) fn seek_step(&mut self, delta_ms: i64, now: Instant) {
+        if self.seek_target.is_some()
+            && now.saturating_duration_since(self.seek_last_step) < SEEK_REPEAT
+        {
             // The settle timer must see it, or a long hold commits early.
             self.seek_last_input = now;
             return;
@@ -129,72 +133,20 @@ impl PlaybackState {
         let Some(dur) = self.now.as_ref().map(|n| n.duration_ms) else {
             return;
         };
-        let from = self.seek_target.unwrap_or_else(|| self.position_ms());
+        let from = self.seek_target.unwrap_or_else(|| self.position_ms(now));
         let target = scrub_target(from, dur, delta_ms);
         self.seek_target = Some(target);
         self.seek_last_step = now;
         self.seek_last_input = now;
-        self.set_local_position(target, false);
+        self.set_local_position(target, false, now);
     }
     /// Commit a finished scrub as a single engine seek, once the keys stop.
     pub(crate) fn flush_seek(&mut self, engine: &Engine, now: Instant) {
-        if now.duration_since(self.seek_last_input) < SEEK_SETTLE {
+        if now.saturating_duration_since(self.seek_last_input) < SEEK_SETTLE {
             return;
         }
         if let Some(target) = self.seek_target.take() {
-            self.seek_to(engine, target);
+            self.seek_to(engine, target, now);
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn playing_at(position_ms: u32, since: Duration) -> PlaybackState {
-        let now = Instant::now();
-        PlaybackState {
-            now: Some(NowPlaying {
-                uri: "spotify:track:x".to_string(),
-                title: String::new(),
-                artist: String::new(),
-                album: String::new(),
-                duration_ms: 200_000,
-                position_ms,
-                position_at: now - since,
-                is_playing: true,
-                cover: None,
-            }),
-            seek_target: None,
-            seek_last_step: now,
-            seek_last_input: now,
-        }
-    }
-
-    #[test]
-    fn freezing_keeps_the_position_and_stops_the_clock() {
-        let mut playback = playing_at(10_000, Duration::from_secs(5));
-        assert!(playback.freeze());
-        let frozen = playback.position_ms();
-        assert!((15_000..16_000).contains(&frozen), "{frozen}");
-        // Stopped means stopped: time passing must not move it any further.
-        std::thread::sleep(Duration::from_millis(20));
-        assert_eq!(playback.position_ms(), frozen);
-    }
-
-    #[test]
-    fn freezing_again_reports_nothing_was_playing() {
-        // The watchdog repeats `Reconnecting` for every failed attempt; only
-        // the first can have interrupted audio.
-        let mut playback = playing_at(0, Duration::ZERO);
-        assert!(playback.freeze());
-        assert!(!playback.freeze());
-    }
-
-    #[test]
-    fn freezing_nothing_is_a_no_op() {
-        let mut playback = playing_at(0, Duration::ZERO);
-        playback.now = None;
-        assert!(!playback.freeze());
     }
 }

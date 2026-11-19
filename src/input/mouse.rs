@@ -68,8 +68,11 @@ pub(crate) fn handle_mouse(
                 {
                     if let Some(dur) = app.playback.now.as_ref().map(|n| n.duration_ms) {
                         let frac = (m.column - bar.x) as f32 / bar.width as f32;
-                        app.playback
-                            .seek_to(&app.svc.engine, (frac * dur as f32) as u32);
+                        app.playback.seek_to(
+                            &app.svc.engine,
+                            (frac * dur as f32) as u32,
+                            Instant::now(),
+                        );
                     }
                 }
             }

@@ -66,7 +66,7 @@ pub(crate) fn render_lyrics(f: &mut Frame, app: &App, theme: Theme, area: Rect) 
         app.view
             .lyrics
             .iter()
-            .rposition(|(t, _)| *t <= app.playback.position_ms())
+            .rposition(|(t, _)| *t <= app.position_ms())
             .unwrap_or(0)
     } else {
         0

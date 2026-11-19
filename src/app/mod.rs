@@ -53,11 +53,21 @@ pub(crate) struct App {
     pub(crate) find: FindState,
     pub(crate) view: ViewState,
     pub(crate) session: SessionState,
+    // Monotonic clock snapshot advanced by callers so render/persistence paths
+    // never read the wall clock directly.
+    pub(crate) clock: Instant,
+    // Startup config captured once at boot so state and UI never read global config.
+    pub(crate) config: AppConfig,
     // What the album art box owes the next frame. See ArtRepaint.
     pub(crate) art_repaint: ArtRepaint,
 }
 
 impl App {
+    /// Current playhead position in milliseconds at `self.clock`.
+    pub(crate) fn position_ms(&self) -> u32 {
+        self.playback.position_ms(self.clock)
+    }
+
     pub(crate) fn cur_items(&self) -> &[LibItem] {
         if let Some(d) = self.browse.details.last() {
             &d.items

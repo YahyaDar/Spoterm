@@ -150,7 +150,7 @@ pub(crate) fn render_library(
         cursor,
         cap,
         total_items,
-        myx::config::get().scrolloff,
+        app.config.scrolloff,
     );
     out.hits.lib = Some(Rect {
         x: inner.x,

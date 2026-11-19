@@ -52,16 +52,20 @@ pub(crate) fn handle_media_control_event(
             app.svc.engine.stop();
         }
         MediaControlEvent::Seek(direction) => match direction {
-            SeekDirection::Backward => app.playback.seek_step(-5_000),
-            SeekDirection::Forward => app.playback.seek_step(5_000),
+            SeekDirection::Backward => app.playback.seek_step(-5_000, Instant::now()),
+            SeekDirection::Forward => app.playback.seek_step(5_000, Instant::now()),
         },
         MediaControlEvent::SeekBy(direction, duration) => match direction {
-            SeekDirection::Backward => app.playback.seek_step(-(duration.as_millis() as i64)),
-            SeekDirection::Forward => app.playback.seek_step(duration.as_millis() as i64),
+            SeekDirection::Backward => app
+                .playback
+                .seek_step(-(duration.as_millis() as i64), Instant::now()),
+            SeekDirection::Forward => app
+                .playback
+                .seek_step(duration.as_millis() as i64, Instant::now()),
         },
         MediaControlEvent::SetPosition(MediaPosition(duration)) => {
             app.playback
-                .seek_to(&app.svc.engine, duration.as_millis() as u32);
+                .seek_to(&app.svc.engine, duration.as_millis() as u32, Instant::now());
         }
         _ => {}
     }

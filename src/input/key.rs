@@ -262,10 +262,10 @@ pub(crate) fn handle_key(
         }
         // Arrow keys rotate the right-pane view; Shift+arrows seek ±5s.
         KeyCode::Right if mods.contains(KeyModifiers::SHIFT) => {
-            app.playback.seek_step(SEEK_STEP_MS)
+            app.playback.seek_step(SEEK_STEP_MS, Instant::now())
         }
         KeyCode::Left if mods.contains(KeyModifiers::SHIFT) => {
-            app.playback.seek_step(-SEEK_STEP_MS)
+            app.playback.seek_step(-SEEK_STEP_MS, Instant::now())
         }
         KeyCode::Right => {
             app.view.mode = app.view.mode.shift_in(app.rotation(), 1);
@@ -289,7 +289,7 @@ pub(crate) fn handle_key(
         // config.toml.
         KeyCode::Char('T') => {
             let on = !app.theme.target.transparent;
-            app.theme.set_transparent(on);
+            app.theme.set_transparent(on, Instant::now());
             app.status = match myx::config::Config::save_transparent(on) {
                 Ok(()) => format!("transparent background {}", if on { "on" } else { "off" }),
                 Err(e) => format!("background switched, but config.toml was not saved: {e}"),

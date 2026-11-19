@@ -2,23 +2,12 @@
 
 use crate::*;
 
-pub(crate) fn render_visualizer(f: &mut Frame, app: &App, theme: Theme, area: Rect) {
-    let active = app
-        .svc
-        .engine
-        .bands
-        .try_lock()
-        .map(|g| g.is_active)
-        .unwrap_or(false);
-    if !active {
+pub(crate) fn render_visualizer(f: &mut Frame, vis: &VisBands, theme: Theme, area: Rect) {
+    if !vis.is_active {
         return;
     }
-    let Ok(guard) = app.svc.engine.bands.try_lock() else {
-        return;
-    };
-    let values: [f32; NUM_BANDS] = guard.values;
-    let peak = guard.peak_envelope.max(1e-6);
-    drop(guard);
+    let values: [f32; NUM_BANDS] = vis.values;
+    let peak = vis.peak_envelope.max(1e-6);
 
     // Cap the spectrum to a centered band — full-pane bars are too tall/wide.
     let vh = ((area.height as u32 * 3 / 5) as u16)

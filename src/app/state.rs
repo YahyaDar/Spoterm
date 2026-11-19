@@ -2,6 +2,24 @@
 
 use crate::*;
 
+/// Startup configuration captured once at boot so state and render code never
+/// read global config or environment variables directly.
+pub(crate) struct AppConfig {
+    pub(crate) forced_layout: Option<LayoutMode>,
+    pub(crate) scrolloff: usize,
+    pub(crate) in_tmux: bool,
+}
+
+impl Default for AppConfig {
+    fn default() -> Self {
+        Self {
+            forced_layout: None,
+            scrolloff: 3,
+            in_tmux: false,
+        }
+    }
+}
+
 /// Long-lived services the UI talks to. All three are used through `&self`
 /// (the `Arc<Mutex<_>>` is only ever cloned), so grouping them costs no
 /// borrow flexibility.
@@ -33,88 +51,80 @@ pub(crate) struct ThemeState {
     pub(crate) notice: Option<String>,
 }
 
-/// `theme = "…"` from the config, resolved once: theme files and pywal's
-/// colours are read at startup, not on every frame.
-pub(crate) fn chosen_theme() -> &'static myx::user_theme::Resolved {
-    static CHOSEN: std::sync::OnceLock<myx::user_theme::Resolved> = std::sync::OnceLock::new();
-    CHOSEN.get_or_init(|| {
-        myx::user_theme::resolve(
-            &myx::config::get().theme,
-            &myx::user_theme::Sources::from_env(),
-        )
-    })
-}
-
 /// The palette before any cover has arrived — or for good, with a fixed theme —
-/// with the background as configured.
-pub(crate) fn startup_theme() -> Theme {
-    let palette = match chosen_theme().choice {
+/// with the configured transparency applied.
+pub(crate) fn resolved_startup_theme(
+    resolved: &myx::user_theme::Resolved,
+    transparent: bool,
+) -> Theme {
+    let palette = match resolved.choice {
         myx::user_theme::Choice::Fixed(theme) => theme,
         myx::user_theme::Choice::Album => TOKYONIGHT,
     };
     Theme {
-        transparent: myx::config::get().transparent,
+        transparent,
         ..palette
     }
 }
 
 impl ThemeState {
-    pub(crate) fn at_startup() -> Self {
-        let chosen = chosen_theme();
-        for warning in &chosen.warnings {
+    pub(crate) fn from_resolved(resolved: &myx::user_theme::Resolved, transparent: bool) -> Self {
+        for warning in &resolved.warnings {
             liblog(warning);
         }
-        let notice = chosen
+        let notice = resolved
             .warnings
             .first()
-            .map(|first| match chosen.warnings.len() {
+            .map(|first| match resolved.warnings.len() {
                 1 => first.clone(),
                 n => format!("{first} (+{} more)", n - 1),
             });
+        let palette = resolved_startup_theme(resolved, transparent);
         Self {
-            displayed: startup_theme(),
-            target: startup_theme(),
+            displayed: palette,
+            target: palette,
             fade: None,
-            fixed: matches!(chosen.choice, myx::user_theme::Choice::Fixed(_)),
+            fixed: matches!(resolved.choice, myx::user_theme::Choice::Fixed(_)),
             notice,
         }
     }
 
     /// A new cover's palette: faded to, unless the config fixed the theme.
-    pub(crate) fn follow_cover(&mut self, to: Theme) {
+    pub(crate) fn follow_cover(&mut self, to: Theme, now: Instant) {
         if !self.fixed {
-            self.start_fade(to);
+            self.start_fade(to, now);
         }
     }
 
-    pub(crate) fn start_fade(&mut self, to: Theme) {
+    pub(crate) fn start_fade(&mut self, to: Theme, now: Instant) {
         // A cover's palette knows nothing of the config; the startup flag rides along.
         let to = Theme {
             transparent: self.target.transparent,
             ..to
         };
-        self.fade = Some(ThemeFade::new(
+        self.fade = Some(ThemeFade::new_at(
             self.displayed,
             to,
             Duration::from_millis(FADE_MS),
+            now,
         ));
         self.target = to;
     }
 
     /// Flip the background between the terminal's and the palette's. A running
     /// fade is restarted towards the same palette so it lands with the new flag.
-    pub(crate) fn set_transparent(&mut self, on: bool) {
+    pub(crate) fn set_transparent(&mut self, on: bool, now: Instant) {
         self.displayed.transparent = on;
         self.target.transparent = on;
         if self.fade.is_some() {
-            self.start_fade(self.target);
+            self.start_fade(self.target, now);
         }
     }
 
-    pub(crate) fn advance(&mut self) {
+    pub(crate) fn advance(&mut self, now: Instant) {
         if let Some(fade) = &self.fade {
-            self.displayed = fade.current();
-            if fade.is_done() {
+            self.displayed = fade.current_at(now);
+            if fade.is_done_at(now) {
                 self.displayed = self.target;
                 self.fade = None;
             }

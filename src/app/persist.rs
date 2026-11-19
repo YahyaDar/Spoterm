@@ -79,7 +79,7 @@ pub(crate) fn save_state(app: &App) {
         artist: now.artist.clone(),
         album: now.album.clone(),
         duration_ms: now.duration_ms,
-        position_ms: app.playback.position_ms(),
+        position_ms: app.position_ms(),
     });
 
     let (repeat, repeat_track) = app.svc.engine.repeat_mode().flags();
