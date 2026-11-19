@@ -32,7 +32,7 @@ pub(crate) fn handle_engine_event(
                 app.transport.playback_started = true;
                 // Reapply persisted modes + volume to the freshly-started playback.
                 let _ = app.svc.engine.shuffle(app.transport.shuffle);
-                let repeat = app.svc.engine.repeat_mode();
+                let repeat = app.transport.repeat;
                 if let Err(e) = app.svc.engine.set_repeat(repeat) {
                     app.status = format!("couldn't restore repeat {}: {e:#}", repeat.label());
                 }

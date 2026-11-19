@@ -48,6 +48,7 @@ pub(crate) fn test_app() -> App {
         },
         transport: Transport {
             shuffle: false,
+            repeat: Repeat::Off,
             volume: 80,
             queue: Vec::new(),
             queue_uris: Vec::new(),
@@ -341,10 +342,9 @@ fn the_footer_never_shows_a_hint_cut_short() {
         "z zen",
         "q quit",
     ];
-    // The repeat hint's label is longer under repeat one. Detached, the engine
-    // can't pass the mode on, but it keeps it.
+    // The repeat hint's label is longer under repeat one.
     for repeat in [Repeat::Off, Repeat::One] {
-        let _ = app.svc.engine.set_repeat(repeat);
+        app.transport.repeat = repeat;
         for w in 10..=200u16 {
             draw(&mut term, &app, w, 30);
             let text = screen_text(&term);
@@ -362,6 +362,33 @@ fn the_footer_never_shows_a_hint_cut_short() {
                 );
             }
         }
+    }
+}
+
+#[test]
+fn footer_shows_transport_repeat_label() {
+    let mut app = test_app();
+    let mut term = Terminal::new(TestBackend::new(200, 30)).unwrap();
+
+    for (mode, want_one) in [
+        (Repeat::Off, false),
+        (Repeat::All, false),
+        (Repeat::One, true),
+    ] {
+        app.transport.repeat = mode;
+        draw(&mut term, &app, 200, 30);
+        let text = screen_text(&term);
+        let footer = text
+            .lines()
+            .rev()
+            .find(|l| !l.trim().is_empty())
+            .expect("a footer row");
+        assert_eq!(
+            footer.contains("R repeat one"),
+            want_one,
+            "{mode:?}: {footer:?}"
+        );
+        assert!(footer.contains("R repeat"), "{mode:?}: {footer:?}");
     }
 }
 

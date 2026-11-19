@@ -172,6 +172,14 @@ impl App {
             self.browse.selected = self.first_selectable();
         }
     }
+    /// Skip to the next track. librespot drops repeat-one on skip, so
+    /// `transport.repeat` follows it (`Repeat::after_skip`) and the next load
+    /// won't turn repeat-one back on.
+    pub(crate) fn skip_next(&mut self) {
+        self.transport.repeat = self.transport.repeat.after_skip();
+        let _ = self.svc.engine.next();
+    }
+
     /// The single entry point for "play this context URI".
     ///
     /// Every caller must route through here so `source` / `source_name` stay in
@@ -183,7 +191,11 @@ impl App {
         self.status = format!("starting {name}…");
         self.transport.source = PlaySource::Context(uri.clone());
         self.transport.source_name = name;
-        if let Err(e) = self.svc.engine.play_context(uri, shuffle) {
+        if let Err(e) = self
+            .svc
+            .engine
+            .play_context(uri, shuffle, self.transport.repeat)
+        {
             self.status = format!("couldn't play: {e:#}");
         }
     }
@@ -213,11 +225,13 @@ impl App {
                     self.transport.source_name = "Liked Songs".to_string();
                     self.status = "starting Liked Songs…".to_string();
                     // Honour the current shuffle toggle instead of a dedicated row.
-                    if let Err(e) =
-                        self.svc
-                            .engine
-                            .play_tracks(uris, None, 0, self.transport.shuffle)
-                    {
+                    if let Err(e) = self.svc.engine.play_tracks(
+                        uris,
+                        None,
+                        0,
+                        self.transport.shuffle,
+                        self.transport.repeat,
+                    ) {
                         self.status = format!("couldn't play: {e:#}");
                     }
                 }
@@ -265,6 +279,7 @@ impl App {
                         Some(item.uri.clone()),
                         0,
                         self.transport.shuffle,
+                        self.transport.repeat,
                     )
                 } else {
                     self.svc.engine.play_context_at(
@@ -272,6 +287,7 @@ impl App {
                         Some(item.uri.clone()),
                         0,
                         self.transport.shuffle,
+                        self.transport.repeat,
                     )
                 };
                 if let Err(e) = result {
@@ -294,11 +310,13 @@ impl App {
                 self.transport.source = PlaySource::None;
                 self.transport.source_name = self.browse.section.label().to_string();
             }
-            if let Err(e) =
-                self.svc
-                    .engine
-                    .play_tracks(uris, Some(item.uri.clone()), 0, self.transport.shuffle)
-            {
+            if let Err(e) = self.svc.engine.play_tracks(
+                uris,
+                Some(item.uri.clone()),
+                0,
+                self.transport.shuffle,
+                self.transport.repeat,
+            ) {
                 self.status = format!("couldn't play: {e:#}");
             }
             return Activated::None;

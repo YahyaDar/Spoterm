@@ -69,33 +69,35 @@ impl SavedState {
             }
         }
     }
+    pub(crate) fn from_app(app: &App) -> Self {
+        let last_played = app.playback.now.as_ref().map(|now| LastPlayed {
+            uri: now.uri.clone(),
+            title: now.title.clone(),
+            artist: now.artist.clone(),
+            album: now.album.clone(),
+            duration_ms: now.duration_ms,
+            position_ms: app.position_ms(),
+        });
+
+        let (repeat, repeat_track) = app.transport.repeat.flags();
+        Self {
+            volume: app.transport.volume,
+            shuffle: app.transport.shuffle,
+            repeat,
+            repeat_track,
+            last_played,
+            queue: app.transport.queue.clone(),
+            queue_uris: app.transport.queue_uris.clone(),
+            source: app.transport.source.clone(),
+            source_name: app.transport.source_name.clone(),
+            equalizer: app.transport.equalizer,
+        }
+    }
 }
 
 /// Snapshot the current session to disk (volume, last track, position, queue).
 pub(crate) fn save_state(app: &App) {
-    let last_played = app.playback.now.as_ref().map(|now| LastPlayed {
-        uri: now.uri.clone(),
-        title: now.title.clone(),
-        artist: now.artist.clone(),
-        album: now.album.clone(),
-        duration_ms: now.duration_ms,
-        position_ms: app.position_ms(),
-    });
-
-    let (repeat, repeat_track) = app.svc.engine.repeat_mode().flags();
-    let s = SavedState {
-        volume: app.transport.volume,
-        shuffle: app.transport.shuffle,
-        repeat,
-        repeat_track,
-        last_played,
-        queue: app.transport.queue.clone(),
-        queue_uris: app.transport.queue_uris.clone(),
-        source: app.transport.source.clone(),
-        source_name: app.transport.source_name.clone(),
-        equalizer: app.transport.equalizer,
-    };
-    s.save();
+    SavedState::from_app(app).save();
 }
 
 #[cfg(test)]
