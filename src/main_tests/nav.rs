@@ -90,7 +90,7 @@ fn the_cursor_is_always_inside_the_viewport() {
 fn loading_rows(w: u16, h: u16) -> Vec<(u16, String)> {
     use ratatui::backend::TestBackend;
     let mut term = Terminal::new(TestBackend::new(w, h)).expect("test terminal");
-    term.draw(|f| render_loading(f, "connecting to Spotify", 0))
+    term.draw(|f| render_loading(f, TOKYONIGHT, "connecting to Spotify", 0))
         .expect("draw");
     let buf = term.backend().buffer().clone();
     (0..h)

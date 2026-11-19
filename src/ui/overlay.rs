@@ -63,8 +63,7 @@ pub(crate) fn render_actions_overlay(f: &mut Frame, app: &App, theme: Theme, are
 pub(crate) const SPINNER: [&str; 8] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧"];
 
 /// The startup screen: wordmark, spinner, and what we're waiting on.
-pub(crate) fn render_loading(f: &mut Frame, label: &str, frame: usize) {
-    let theme = startup_theme();
+pub(crate) fn render_loading(f: &mut Frame, theme: Theme, label: &str, frame: usize) {
     let area = f.area();
     f.render_widget(Block::default().style(theme.panel()), area);
 

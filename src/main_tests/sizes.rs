@@ -13,6 +13,7 @@ use ratatui::Terminal;
 /// A whole app, as `boot` builds one, minus Spotify: nothing loaded, nothing
 /// playing. Tests set what they need on top.
 pub(crate) fn test_app() -> App {
+    let now = Instant::now();
     App {
         svc: Services {
             engine: Engine::detached(),
@@ -26,10 +27,10 @@ pub(crate) fn test_app() -> App {
         playback: PlaybackState {
             now: None,
             seek_target: None,
-            seek_last_step: Instant::now(),
-            seek_last_input: Instant::now(),
+            seek_last_step: now,
+            seek_last_input: now,
         },
-        // Not `ThemeState::at_startup`: that reads the user's config file.
+        // Not `ThemeState::from_resolved(chosen_theme(), …)`: that reads the user's config file.
         theme: ThemeState {
             displayed: TOKYONIGHT,
             target: TOKYONIGHT,
@@ -81,6 +82,8 @@ pub(crate) fn test_app() -> App {
             last_ctrl_c: None,
             last_click: None,
         },
+        clock: now,
+        config: AppConfig::default(),
         art_repaint: ArtRepaint::Idle,
     }
 }
@@ -111,7 +114,7 @@ pub(crate) fn playing_app() -> App {
         album: "IGOR".to_string(),
         duration_ms: 177_000,
         position_ms: 15_000,
-        position_at: Instant::now(),
+        position_at: app.clock,
         is_playing: true,
         cover: Some(Cover::from_image(cover, Picker::halfblocks())),
     });
@@ -133,13 +136,25 @@ pub(crate) fn playing_app() -> App {
 }
 
 /// Draw `app` into `term` (resized to `w`×`h`).
-fn draw(term: &mut Terminal<TestBackend>, app: &App, w: u16, h: u16) {
+fn draw_with_vis(
+    term: &mut Terminal<TestBackend>,
+    app: &App,
+    vis: &VisBands,
+    w: u16,
+    h: u16,
+) -> FrameOut {
     term.backend_mut().resize(w, h);
     term.resize(ratatui::layout::Rect::new(0, 0, w, h))
         .expect("resize");
     let mut out = FrameOut::default();
-    term.draw(|f| render(f, app, &mut out, ArtRepaint::Idle))
+    term.draw(|f| render(f, app, vis, &mut out, ArtRepaint::Idle))
         .unwrap_or_else(|e| panic!("draw at {w}x{h}: {e}"));
+    out
+}
+
+fn draw(term: &mut Terminal<TestBackend>, app: &App, w: u16, h: u16) {
+    let vis = VisBands::default();
+    draw_with_vis(term, app, &vis, w, h);
 }
 
 /// Dense where small screens break, sparse above.
@@ -545,4 +560,71 @@ fn zen_in_focus_leaves_the_library_view_and_keeps_it_out() {
         press(&mut app, KeyCode::Right);
         assert_ne!(app.view.mode, RightView::Library);
     }
+}
+
+#[test]
+fn visualizer_renders_from_injected_vis_bands_without_engine() {
+    let mut app = playing_app();
+    app.svc.cell = ratatui_image::FontSize::new(1, 2);
+    app.view.layout = LayoutMode::Full;
+    app.view.mode = RightView::NowPlaying;
+    // Engine's own VisBands remains inactive; only the injected snapshot is active.
+    assert!(!app.svc.engine.bands.lock().unwrap().is_active);
+
+    let mut term = Terminal::new(TestBackend::new(120, 40)).expect("test terminal");
+    let inactive = VisBands::default();
+    draw_with_vis(&mut term, &app, &inactive, 120, 40);
+    let before = screen_text(&term);
+
+    let active = VisBands {
+        is_active: true,
+        values: [1.0; NUM_BANDS],
+        peak_envelope: 1.0,
+        ..VisBands::default()
+    };
+    draw_with_vis(&mut term, &app, &active, 120, 40);
+    let after = screen_text(&term);
+
+    assert_ne!(
+        before, after,
+        "active VisBands snapshot must change the rendered visualizer"
+    );
+    assert!(
+        after.contains('█'),
+        "expected full-height spectrum bars from active VisBands:\n{after}"
+    );
+}
+
+#[test]
+fn render_uses_app_clock_and_scrolloff_without_global_reads() {
+    let mut app = playing_app();
+    app.svc.cell = ratatui_image::FontSize::new(1, 2);
+    app.view.layout = LayoutMode::Full;
+    app.view.mode = RightView::NowPlaying;
+    // Advance App.clock by 10s past the 15s starting position -> 0:25.
+    app.clock += Duration::from_secs(10);
+
+    let mut term = Terminal::new(TestBackend::new(120, 30)).expect("test terminal");
+    let vis = VisBands::default();
+    draw_with_vis(&mut term, &app, &vis, 120, 30);
+    let text = screen_text(&term);
+    assert!(
+        text.contains("0:25"),
+        "expected progress to use app.clock (0:25):\n{text}"
+    );
+
+    // Selecting row 15 in a 40-row Liked list with scrolloff=4 vs scrolloff=0
+    // produces different viewport offsets driven by app.scrolloff.
+    app.browse.section = Section::Liked;
+    app.browse.selected = 18;
+    app.config.scrolloff = 0;
+    let out_zero = draw_with_vis(&mut term, &app, &vis, 120, 24);
+    app.config.scrolloff = 4;
+    let out_four = draw_with_vis(&mut term, &app, &vis, 120, 24);
+    assert!(
+        out_four.lib_offset > out_zero.lib_offset,
+        "expected app.scrolloff=4 ({}) to scroll further than scrolloff=0 ({})",
+        out_four.lib_offset,
+        out_zero.lib_offset
+    );
 }

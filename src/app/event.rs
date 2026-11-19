@@ -6,7 +6,9 @@ pub(crate) fn handle_engine_event(
     app: &mut App,
     ev: EngineEvent,
     meta_tx: &flume::Sender<TrackMeta>,
+    now: Instant,
 ) {
+    app.clock = now;
     // Position ticks would bury everything else in the log.
     if !matches!(ev, EngineEvent::PositionCorrection { .. }) {
         liblog(format!("engine: {ev:?}"));
@@ -39,7 +41,7 @@ pub(crate) fn handle_engine_event(
             if let Some(n) = app.playback.now.as_mut() {
                 n.is_playing = true;
             }
-            app.playback.set_local_position(position_ms, true);
+            app.playback.set_local_position(position_ms, true, now);
             if let Some(controls) = app.media_controls.as_mut() {
                 let _ = controls.set_playback(MediaPlayback::Playing {
                     progress: Some(MediaPosition(Duration::from_millis(position_ms as u64))),
@@ -50,7 +52,7 @@ pub(crate) fn handle_engine_event(
             if let Some(n) = app.playback.now.as_mut() {
                 n.is_playing = false;
             }
-            app.playback.set_local_position(position_ms, true);
+            app.playback.set_local_position(position_ms, true, now);
             if let Some(controls) = app.media_controls.as_mut() {
                 let _ = controls.set_playback(MediaPlayback::Paused {
                     progress: Some(MediaPosition(Duration::from_millis(position_ms as u64))),
@@ -68,7 +70,7 @@ pub(crate) fn handle_engine_event(
             }
         }
         EngineEvent::PositionCorrection { position_ms, .. } => {
-            app.playback.set_local_position(position_ms, true);
+            app.playback.set_local_position(position_ms, true, now);
             if let (Some(n), Some(controls)) =
                 (app.playback.now.as_ref(), app.media_controls.as_mut())
             {
@@ -93,7 +95,7 @@ pub(crate) fn handle_engine_event(
             // The old player is gone with the old connection, so the audio has
             // already stopped. Stop the progress bar with it instead of letting
             // it run on to the end of a track nobody is hearing.
-            if app.playback.freeze() {
+            if app.playback.freeze(now) {
                 app.transport.resume_after_reconnect = true;
             }
             app.status = "connection dropped — reconnecting…".to_string();
@@ -106,7 +108,7 @@ pub(crate) fn handle_engine_event(
             if let Some(controls) = app.media_controls.as_mut() {
                 let _ = controls.set_playback(MediaPlayback::Paused {
                     progress: Some(MediaPosition(Duration::from_millis(
-                        app.playback.position_ms() as u64,
+                        app.playback.position_ms(now) as u64,
                     ))),
                 });
             }
@@ -135,7 +137,9 @@ pub(crate) fn apply_meta(
     app: &mut App,
     meta: TrackMeta,
     lyrics_tx: &flume::Sender<(Vec<(u32, String)>, bool)>,
+    now: Instant,
 ) {
+    app.clock = now;
     // Metadata fetches run on independent blocking tasks, so skipping quickly
     // (n/b) can land an earlier track's reply after a later one. Applying it
     // would replace the whole NowPlaying — title, artist and cover — with the
@@ -182,7 +186,7 @@ pub(crate) fn apply_meta(
             .as_ref()
             .map(|n| n.position_ms)
             .unwrap_or(0),
-        position_at: Instant::now(),
+        position_at: now,
         is_playing: app
             .playback
             .now
@@ -193,7 +197,7 @@ pub(crate) fn apply_meta(
     });
 
     if let Some(theme) = meta.theme {
-        app.theme.follow_cover(theme);
+        app.theme.follow_cover(theme, now);
         // Same instant, same palette: whatever the UI is fading towards is
         // exactly what subscribers are told to fade towards. With a fixed
         // theme the UI stays put, but subscribers still get the cover's

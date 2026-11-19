@@ -4,6 +4,7 @@
 mod find;
 mod lyrics;
 mod nav;
+mod playback;
 mod playlist;
 mod repeat;
 mod search;

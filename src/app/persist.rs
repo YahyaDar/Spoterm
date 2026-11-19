@@ -76,7 +76,7 @@ impl SavedState {
             artist: now.artist.clone(),
             album: now.album.clone(),
             duration_ms: now.duration_ms,
-            position_ms: app.playback.position_ms(),
+            position_ms: app.position_ms(),
         });
 
         let (repeat, repeat_track) = app.transport.repeat.flags();

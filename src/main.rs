@@ -46,8 +46,8 @@ use app::*;
 use input::*;
 use myx::anim::ThemeFade;
 use myx::audio::{
-    EqualizerPreset, EqualizerSettings, EQ_FREQUENCIES_HZ, MAX_EQ_GAIN_DB, MIN_EQ_GAIN_DB,
-    NUM_BANDS, NUM_EQ_BANDS,
+    EqualizerPreset, EqualizerSettings, VisBands, EQ_FREQUENCIES_HZ, MAX_EQ_GAIN_DB,
+    MIN_EQ_GAIN_DB, NUM_BANDS, NUM_EQ_BANDS,
 };
 use myx::components::{gradient_line, gradient_progress, left_bar_block};
 use myx::cover::Cover;
@@ -340,6 +340,24 @@ fn should_restore_saved_playback(
     configured && startup_uri.is_none() && saved.last_played.is_some()
 }
 
+/// `theme = "…"` from the config, resolved once: theme files and pywal's
+/// colours are read at startup, not on every frame.
+fn chosen_theme() -> &'static myx::user_theme::Resolved {
+    static CHOSEN: std::sync::OnceLock<myx::user_theme::Resolved> = std::sync::OnceLock::new();
+    CHOSEN.get_or_init(|| {
+        myx::user_theme::resolve(
+            &myx::config::get().theme,
+            &myx::user_theme::Sources::from_env(),
+        )
+    })
+}
+
+/// The palette before any cover has arrived — or for good, with a fixed theme —
+/// with the background as configured.
+fn startup_theme() -> Theme {
+    resolved_startup_theme(chosen_theme(), myx::config::get().transparent)
+}
+
 /// Everything from the loading screen to the event loop. Split out of `main` so
 /// a failure on the way up still leaves the terminal restored.
 async fn boot(
@@ -378,11 +396,10 @@ async fn boot(
         let _ = engine.play_context(uri.clone(), false, repeat);
     }
 
-    let restore_on_startup = should_restore_saved_playback(
-        myx::config::get().restore_on_startup,
-        startup_uri.as_deref(),
-        &saved,
-    );
+    let cfg = myx::config::get();
+    let boot_now = Instant::now();
+    let restore_on_startup =
+        should_restore_saved_playback(cfg.restore_on_startup, startup_uri.as_deref(), &saved);
     let now = restore_on_startup
         .then_some(saved.last_played.as_ref())
         .flatten()
@@ -393,7 +410,7 @@ async fn boot(
             album: last_played.album.clone(),
             duration_ms: last_played.duration_ms,
             position_ms: last_played.position_ms,
-            position_at: Instant::now(),
+            position_at: boot_now,
             is_playing: false,
             cover: None,
         });
@@ -443,10 +460,10 @@ async fn boot(
         playback: PlaybackState {
             now,
             seek_target: None,
-            seek_last_step: Instant::now(),
-            seek_last_input: Instant::now(),
+            seek_last_step: boot_now,
+            seek_last_input: boot_now,
         },
-        theme: ThemeState::at_startup(),
+        theme: ThemeState::from_resolved(chosen_theme(), cfg.transparent),
         status: "loading library…".to_string(),
         browse: BrowseState {
             library: Library::default(),
@@ -494,6 +511,12 @@ async fn boot(
             pending_meta: None,
             last_ctrl_c: None,
             last_click: None,
+        },
+        clock: boot_now,
+        config: AppConfig {
+            forced_layout: forced_layout(&cfg.layout),
+            scrolloff: cfg.scrolloff,
+            in_tmux: std::env::var_os("TMUX").is_some(),
         },
         art_repaint: ArtRepaint::Idle,
     };
@@ -612,7 +635,6 @@ async fn run_ui(
             progress: Some(MediaPosition(Duration::from_millis(now.position_ms as u64))),
         });
     }
-    let in_tmux = std::env::var_os("TMUX").is_some();
 
     let mut lib_attempts: u32 = 0;
     // A persistent interval must live OUTSIDE the select loop. Recreating a
@@ -626,7 +648,6 @@ async fn run_ui(
     // Nothing is on screen yet, so the first tick must draw.
     let mut dirty = true;
     let mut last_layout = (app.view.mode, app.view.zen, app.view.layout);
-    let forced_layout = forced_layout(&myx::config::get().layout);
     let mut overlay_open = app.view.actions.is_some();
     // A popup overwrites inline-image pixels. Replay the cached cover after the
     // popup-free frame instead of blanking it for one visible frame first.
@@ -642,11 +663,14 @@ async fn run_ui(
             // kill, a closed terminal, kill -INT: leave the way `q` does.
             sig = signals.recv() => {
                 liblog(format!("{sig}: saving and quitting"));
+                app.clock = Instant::now();
                 save_state(&app);
                 break;
             }
             _ = frame.tick() => {
-                app.playback.flush_seek(&app.svc.engine, Instant::now());
+                let now = Instant::now();
+                app.clock = now;
+                app.playback.flush_seek(&app.svc.engine, now);
                 // Drain library updates deterministically before rendering. Keeping
                 // this solely as a select arm could starve under a hot player-event
                 // stream / 60fps visualizer — which looked like a frozen library.
@@ -727,7 +751,7 @@ async fn run_ui(
                         && app.svc.engine.bands.try_lock().map(|g| g.is_active).unwrap_or(false));
                 // A resize burst has gone quiet: measure the cell again, then
                 // draw the cover for it (the slot stayed blank meanwhile).
-                if cell_watch.due(Instant::now()) {
+                if cell_watch.due(now) {
                     if let Some(cell) = measure_cell(&app.svc.picker, &input_gate) {
                         if !myx::cover::same_cell(cell, app.svc.cell) {
                             liblog(format!("cell: {:?} -> {cell:?}", app.svc.cell));
@@ -742,8 +766,12 @@ async fn run_ui(
                 }
                 // The screen's size picks the layout, every frame.
                 if let Ok(size) = terminal.size() {
-                    let layout =
-                        choose_layout(size.width, size.height, app.view.layout, forced_layout);
+                    let layout = choose_layout(
+                        size.width,
+                        size.height,
+                        app.view.layout,
+                        app.config.forced_layout,
+                    );
                     if layout != app.view.layout {
                         app.view.layout = layout;
                         app.settle_view();
@@ -767,19 +795,28 @@ async fn run_ui(
                     dirty = true;
                 }
                 if should_draw(dirty, animating, last_draw.elapsed()) {
-                    app.theme.advance();
+                    let draw_now = Instant::now();
+                    app.clock = draw_now;
+                    app.theme.advance(draw_now);
                     // Present the frame atomically. Without this the terminal
                     // renders whatever has arrived so far, and a recolour that
                     // touches every glyph on screen shows up half-applied.
                     // Terminals that don't know the mode ignore it. tmux answers
                     // its end by redrawing the whole pane and re-sending the
                     // cover, which blinks it on every frame.
-                    if !in_tmux {
+                    if !app.config.in_tmux {
                         let _ = execute!(io::stdout(), BeginSynchronizedUpdate);
                     }
                     let repaint = app.art_repaint;
+                    let vis = app
+                        .svc
+                        .engine
+                        .bands
+                        .try_lock()
+                        .map(|g| g.clone())
+                        .unwrap_or_default();
                     let drawn = terminal
-                        .draw(|f| render(f, &app, &mut out, repaint))
+                        .draw(|f| render(f, &app, &vis, &mut out, repaint))
                         .map(|_| ());
                     let restore_result = if drawn.is_ok()
                         && restore_art
@@ -799,7 +836,7 @@ async fn run_ui(
                     } else {
                         None
                     };
-                    if !in_tmux {
+                    if !app.config.in_tmux {
                         let _ = execute!(io::stdout(), EndSynchronizedUpdate);
                     }
                     drawn?;
@@ -829,7 +866,7 @@ async fn run_ui(
             ev = ev_rx.recv_async() => {
                 let Ok(ev) = ev else { break };
                 let reconnected = matches!(ev, EngineEvent::Reconnected);
-                handle_engine_event(&mut app, ev, &chans.meta);
+                handle_engine_event(&mut app, ev, &chans.meta, Instant::now());
                 // The replacement Connect device starts empty; reload what was
                 // playing so a dropped access point costs a gap, not the track.
                 if reconnected && std::mem::take(&mut app.transport.resume_after_reconnect) {
@@ -843,6 +880,7 @@ async fn run_ui(
                     Ok(Event::Key(key)) if key.kind == KeyEventKind::Press => {
                         let quit = handle_key(&mut app, typed_key(key), key.modifiers, &chans);
                         if quit {
+                            app.clock = Instant::now();
                             save_state(&app);
                             break;
                         }
@@ -850,6 +888,7 @@ async fn run_ui(
                     Ok(Event::Mouse(m)) => {
                         let quit = handle_mouse(&mut app, &out, m, &chans);
                         if quit {
+                            app.clock = Instant::now();
                             save_state(&app);
                             break;
                         }
@@ -864,7 +903,7 @@ async fn run_ui(
                         cell_watch.resized(Instant::now());
                         app.view.cell_settling = true;
                     }
-                    Ok(Event::FocusGained) if in_tmux => {
+                    Ok(Event::FocusGained) if app.config.in_tmux => {
                         restore_art = true;
                     }
                     _ => {}
@@ -882,7 +921,7 @@ async fn run_ui(
                 true
             }
             m = meta_rx.recv_async() => {
-                if let Ok(meta) = m { apply_meta(&mut app, meta, &chans.lyrics); }
+                if let Ok(meta) = m { apply_meta(&mut app, meta, &chans.lyrics, Instant::now()); }
                 true
             }
             q = queue_rx.recv_async() => {
@@ -1071,6 +1110,7 @@ async fn with_loader<T>(
     task: impl std::future::Future<Output = T>,
 ) -> Result<T> {
     tokio::pin!(task);
+    let theme = startup_theme();
     let mut tick = tokio::time::interval(Duration::from_millis(80));
     let mut frame: usize = 0;
     loop {
@@ -1080,7 +1120,7 @@ async fn with_loader<T>(
             // Nothing to save yet; returning lets the terminal be restored.
             sig = signals.recv() => anyhow::bail!("stopped by {sig} while {label}"),
             _ = tick.tick() => {
-                terminal.draw(|f| render_loading(f, label, frame))?;
+                terminal.draw(|f| render_loading(f, theme, label, frame))?;
                 frame = frame.wrapping_add(1);
             }
         }

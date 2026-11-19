@@ -15,7 +15,7 @@ use ratatui::style::{Color, Modifier, Style};
 
 /// A complete semantic palette. Field names mirror noodle's `Theme` interface
 /// so cross-referencing is trivial.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Theme {
     pub name: &'static str,
 

@@ -30,6 +30,7 @@ const DECAY_FACTOR: f32 = 0.985;
 const DECAY_FACTOR_PEAK: f32 = 0.9985;
 
 /// Shared frequency-band state written by the audio sink, read by the renderer.
+#[derive(Debug, Clone)]
 pub struct VisBands {
     pub values: [f32; NUM_BANDS],
     pub updated_at: Instant,

@@ -171,6 +171,7 @@ fn np_beside(
 pub(crate) fn render_nowplaying_view(
     f: &mut Frame,
     app: &App,
+    vis: &VisBands,
     out: &mut FrameOut,
     theme: Theme,
     area: Rect,
@@ -247,7 +248,7 @@ pub(crate) fn render_nowplaying_view(
     );
 
     if let Some(viz) = layout.visualizer {
-        render_visualizer(f, app, theme, viz);
+        render_visualizer(f, vis, theme, viz);
     }
     shown > 0
 }
@@ -318,7 +319,7 @@ pub(crate) fn render_now_strip(
     }
     let prefix_len = track.as_deref().map_or(0, |t| t.width() as u16);
     // Seek/progress bar. Record bar geometry for click-to-seek.
-    let pos = app.playback.position_ms();
+    let pos = app.position_ms();
     let left_len = prefix_len + format!("{} ", fmt_ms(pos)).chars().count() as u16;
     let right_len = format!(
         " {}",
@@ -352,7 +353,7 @@ pub(crate) fn render_progress(
     track: Option<String>,
 ) {
     let (pos, dur) = match &app.playback.now {
-        Some(n) => (app.playback.position_ms(), n.duration_ms.max(1)),
+        Some(n) => (app.position_ms(), n.duration_ms.max(1)),
         None => (0, 1),
     };
     // Compute the bar width from the exact label lengths so the duration sits
